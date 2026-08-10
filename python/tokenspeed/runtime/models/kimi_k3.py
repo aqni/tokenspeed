@@ -101,6 +101,7 @@ from tokenspeed.runtime.distributed.comm_ops import (
     all_reduce_two,
     prepare_all_reduce_fusion,
     prepare_all_reduce_lane,
+    token_all_gather,
 )
 from tokenspeed.runtime.distributed.mapping import Mapping
 from tokenspeed.runtime.execution.cuda_graph_wrapper import get_is_capture_mode
@@ -985,7 +986,7 @@ class KimiLinearMoE(nn.Module):
             # Both the TRT-LLM and Marlin SiTU paths currently require a
             # replicated-token all-reduce topology (attn TP == MoE TP*EP);
             # Attn-DP/MoE-EP RSAG is not wired for either.
-            if mapping.moe.has_tp_ep and mapping.attn.tp_size != mapping.moe.tp_ep_size:
+            if mapping.moe.has_tp_ep and mapping.attn.tp_size * mapping.attn.dp_size != mapping.moe.tp_ep_size:
                 raise ValueError(
                     "Kimi-K3's SiTU MoE currently requires a "
                     "replicated-token all-reduce topology: attn TP size must equal "
@@ -1075,6 +1076,23 @@ class KimiLinearMoE(nn.Module):
                 1,
             ),
         )
+        if (
+            not self.execution_plan.use_native
+            and mapping.moe.has_tp_ep
+            and mapping.attn.tp_size != mapping.moe.tp_ep_size
+            and self.execution_plan.fused_moe_ar
+        ):
+            # The fused-AR comm-fusion lane (kimi3_join_reduce_moe) bakes
+            # all_reduce(moe.tp_ep_group) into its kernel and has no
+            # RSAG-aware (gather/reduce-scatter) variant yet; only the plain
+            # _routed_experts/_reduce_shared path below is wired for
+            # Attn-DP/MoE-EP topology mismatches. (joint_moe_reduce is
+            # native-only, so it can't be set here.)
+            raise ValueError(
+                "Kimi-K3's SiTU MoE fused all-reduce comm lane (fused_moe_ar) "
+                "requires a replicated-token all-reduce topology: attn TP "
+                "size must equal MoE TP*EP size."
+            )
 
         self._topk_ready = torch.cuda.Event() if alt_stream is not None else None
 
@@ -1199,6 +1217,8 @@ class KimiLinearMoE(nn.Module):
         topk_output: TopKOutput,
         num_global_tokens: int,
         max_num_tokens_per_gpu: int,
+        ctx: "ForwardContext",
+        comm_manager: CommManager,
         skip_reduce: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Run the precomputed-TopK SiTU MoE (TRT-LLM cubin or Hopper Marlin)."""
@@ -1207,6 +1227,11 @@ class KimiLinearMoE(nn.Module):
                 "Kimi-K3 has no portable SiTU Triton fallback; use the native, "
                 "FlashInfer TRT-LLM, or Marlin SiTU MoE path."
             )
+        routed_in = self._pre_moe_comm(routed_in, ctx, comm_manager)
+        topk_output = topk_output._replace(
+            topk_weights=self._pre_moe_comm(topk_output.topk_weights, ctx, comm_manager),
+            topk_ids=self._pre_moe_comm(topk_output.topk_ids, ctx, comm_manager),
+        )
         out = self.experts(
             hidden_states=routed_in,
             topk_output=topk_output,
@@ -1217,8 +1242,8 @@ class KimiLinearMoE(nn.Module):
         # contiguous expert shard. The routed kernel returns that rank's
         # partial contribution, which must be combined before the replicated
         # norm/up projection (skip_reduce: caller's fused AR covers it).
-        if self.mapping.moe.has_tp_ep and not skip_reduce:
-            out = all_reduce(out, self.mapping.moe.tp_ep_group)
+        if not skip_reduce:
+            out = self._post_moe_comm(out, ctx, comm_manager)
         return out
 
     def _forward_fused_decode_pipeline(
@@ -1282,12 +1307,147 @@ class KimiLinearMoE(nn.Module):
             shared_output,
         )
 
+    def _attn_dp_rank_of(self, rank: int) -> int:
+        """attn-dp-rank owning ``rank`` (cp peers share their dp group's rank)."""
+        assert self.mapping.attn.dp_size * self.mapping.attn.tp_size == self.mapping.moe.tp_ep_size
+        return rank // self.mapping.attn.tp_size
+
+    def _kimi_moe_tp_ep_group_token_counts(
+        self, ctx: "ForwardContext"
+    ) -> tuple[list[int], int]:
+        """Per-``moe.tp_ep_group``-rank token counts for the RSAG comm below.
+
+        Unlike ``CommManager.moe_tp_ep_group_scattered_num_tokens`` (which
+        assumes the incoming hidden_states were already reduce-scattered
+        across ``attn.tp_group``), Kimi-K3's AttnRes path never scatters:
+        every rank in an ``attn.tp_group`` (and ``attn.cp_group``) holds a
+        full, *replicated* copy of its attn-dp-rank's tokens (see
+        ``KimiLinearDecoderLayer._reduce_attn_accumulate`` /
+        ``KimiLinearMLAAttention``'s ``o_proj`` all_reduce). So the token
+        table here must report each attn-dp-rank's *unscattered* count, and
+        only once per dp-rank -- the first ``moe.tp_ep_group`` member seen
+        for a given dp-rank is treated as that dp-rank's representative and
+        contributes the full count; every later member of the same dp-rank
+        contributes 0 rows (it holds a redundant copy, not new data).
+
+        Returns ``(token_counts, local_group_index)`` where
+        ``local_group_index`` is this rank's position in
+        ``moe.tp_ep_group`` and ``token_counts[local_group_index]`` is
+        nonzero iff this rank is its dp-rank's representative.
+        """
+        local_index = self.mapping.moe.tp_ep_group.index(self.mapping.rank)
+        global_counts = (
+            ctx.collective_global_num_tokens
+            if ctx.collective_global_num_tokens is not None
+            else ctx.global_num_tokens
+        )
+        if global_counts is None:
+            # No cross-rank metadata (e.g. single attn-dp group): every rank
+            # in the group belongs to the same (local) dp-rank, so only the
+            # local rank contributes and every other entry is a same-batch
+            # duplicate -- report a single representative's worth of tokens.
+            num_tokens = (
+                ctx.collective_num_tokens
+                if ctx.collective_num_tokens is not None
+                else ctx.input_num_tokens
+            )
+            counts = [0] * self.mapping.moe.tp_ep_size
+            counts[local_index] = num_tokens
+            return counts, local_index
+
+        seen_dp_ranks: dict[int, int] = {}
+        counts = []
+        for i, rank in enumerate(self.mapping.moe.tp_ep_group):
+            dp_rank = self._attn_dp_rank_of(rank)
+            if dp_rank in seen_dp_ranks:
+                counts.append(0)
+                continue
+            seen_dp_ranks[dp_rank] = i
+            # dp-major indexing into global_counts: any tp/cp peer of
+            # dp_rank reports the same (unscattered) count.
+            attn = self.mapping.attn
+            counts.append(global_counts[dp_rank * attn.tp_size * attn.cp_size])
+        return counts, local_index
+
+    def _pre_moe_comm(
+        self,
+        hidden_states: torch.Tensor,
+        ctx: "ForwardContext",
+        comm_manager: CommManager
+    ) -> torch.Tensor:
+        """All-gather replicated per-dp-rank tokens into the MoE-TP-EP group.
+
+        Kimi-K3's attn output is replicated within ``attn.tp_group`` (never
+        reduce-scattered), so this cannot reuse
+        ``CommManager.pre_moe_comm``: that helper's RSAG branch sizes the
+        gather from ``moe_tp_ep_group_scattered_num_tokens``, which assumes
+        each rank already holds a disjoint attn-tp slice. Here every rank
+        instead holds a full copy of its attn-dp-rank's tokens, so the
+        gather must deduplicate per dp-rank (see
+        ``_kimi_moe_tp_ep_group_token_counts``) instead of slicing.
+        """
+        if not self.mapping.moe.has_tp_ep:
+            return hidden_states
+        if self.mapping.attn.tp_size == self.mapping.moe.tp_ep_size:
+            # Replicated-token AR topology: every rank's hidden_states is
+            # already the one global copy the routed/shared kernels expect.
+            return hidden_states
+
+        token_counts, local_index = self._kimi_moe_tp_ep_group_token_counts(ctx)
+        if token_counts[local_index] == 0:
+            # Not this dp-rank's representative in the group: contribute no
+            # rows so the gather doesn't double-count the redundant copy.
+            hidden_states = hidden_states[:0]
+        return token_all_gather(
+            hidden_states,
+            group=self.mapping.moe.tp_ep_group,
+            scattered_num_tokens=token_counts,
+        )
+
+    def _post_moe_comm(
+        self,
+        hidden_states: torch.Tensor,
+        ctx: "ForwardContext",
+        comm_manager: CommManager
+    ) -> torch.Tensor:
+        """Combine MoE-TP-EP partials back into each attn-dp-rank's tokens.
+
+        The all_reduce step is identical to (and reuses)
+        ``comm_ops.all_reduce`` -- every rank's partial spans the same
+        gathered token set, so summing across ``moe.tp_ep_group`` is valid
+        regardless of topology. Only the post-reduce slicing differs from
+        ``CommManager.post_moe_comm``: instead of a ``token_reduce_scatter``
+        keyed by attn-tp slices, this slices the (now fully reduced, still
+        replicated-per-dp-rank) result back to this rank's dp-rank segment,
+        using the same dedup boundaries as ``_pre_moe_comm`` so every rank
+        in an ``attn.tp_group`` reads out an identical copy.
+        """
+        if not self.mapping.moe.has_tp_ep:
+            return hidden_states
+        reduced = all_reduce(hidden_states, self.mapping.moe.tp_ep_group)
+        if self.mapping.attn.tp_size == self.mapping.moe.tp_ep_size:
+            return reduced
+
+        token_counts, _ = self._kimi_moe_tp_ep_group_token_counts(ctx)
+        local_dp_rank = self._attn_dp_rank_of(self.mapping.rank)
+        offset = 0
+        for rank, count in zip(self.mapping.moe.tp_ep_group, token_counts):
+            if self._attn_dp_rank_of(rank) == local_dp_rank:
+                return reduced[offset : offset + count]
+            offset += count
+        raise AssertionError(
+            "local rank's attn-dp-rank not represented in moe.tp_ep_group "
+            "token table; this should be unreachable"
+        )
+
     def forward(
         self,
         hidden_states: torch.Tensor,
         prefix_sum: torch.Tensor,
         num_global_tokens: int,
         max_num_tokens_per_gpu: int,
+        ctx: "ForwardContext",
+        comm_manager: CommManager,
     ) -> torch.Tensor:
         """Routed + shared experts, accumulated onto ``prefix_sum``.
 
@@ -1326,8 +1486,9 @@ class KimiLinearMoE(nn.Module):
                 topk_output = self.topk(hidden_states, router_logits)
                 if self._topk_ready is not None and fork._active:
                     self._topk_ready.record(torch.cuda.current_stream())
+                shared_in = self._pre_moe_comm(hidden_states, ctx, comm_manager)
                 shared_partial = self.shared_experts(
-                    hidden_states,
+                    shared_in,
                     down_out=(
                         lane[:, self.routed_hidden :] if lane is not None else None
                     ),
@@ -1340,6 +1501,8 @@ class KimiLinearMoE(nn.Module):
                 topk_output,
                 num_global_tokens,
                 max_num_tokens_per_gpu,
+                ctx,
+                comm_manager,
                 skip_reduce=self.execution_plan.fused_moe_ar,
             )
             if not self.execution_plan.fused_moe_ar:
@@ -1364,7 +1527,7 @@ class KimiLinearMoE(nn.Module):
                 shared_out,
             ).view(num_tokens, hidden_size)
         else:
-            shared_out = self._reduce_shared(shared_partial)
+            shared_out = self._post_moe_comm(shared_partial, ctx, comm_manager)
         # routed_scaling_factor already applied in TopK; not re-applied here
         # (matches the reference).
         return add3(
@@ -1723,6 +1886,8 @@ class KimiLinearDecoderLayer(nn.Module):
                 prefix_sum,
                 num_global_tokens=num_global_tokens,
                 max_num_tokens_per_gpu=max_num_tokens_per_gpu,
+                ctx=ctx,
+                comm_manager=self.comm_manager,
             )
         else:
             prefix_sum = prefix_sum + self.mlp(h)

@@ -214,6 +214,8 @@ class KimiK3DraftDecoderLayer(nn.Module):
             residual,
             num_global_tokens=num_global_tokens,
             max_num_tokens_per_gpu=max_num_tokens_per_gpu,
+            ctx=ctx,
+            comm_manager=self.comm_manager,
         )
         return prefix.view(residual.shape)
 
