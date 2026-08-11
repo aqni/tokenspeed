@@ -101,7 +101,6 @@ from tokenspeed.runtime.distributed.comm_ops import (
     all_reduce_two,
     prepare_all_reduce_fusion,
     prepare_all_reduce_lane,
-    token_all_gather,
 )
 from tokenspeed.runtime.distributed.mapping import Mapping
 from tokenspeed.runtime.execution.cuda_graph_wrapper import get_is_capture_mode
@@ -1307,68 +1306,6 @@ class KimiLinearMoE(nn.Module):
             shared_output,
         )
 
-    def _attn_dp_rank_of(self, rank: int) -> int:
-        """attn-dp-rank owning ``rank`` (cp peers share their dp group's rank)."""
-        assert self.mapping.attn.dp_size * self.mapping.attn.tp_size == self.mapping.moe.tp_ep_size
-        return rank // self.mapping.attn.tp_size
-
-    def _kimi_moe_tp_ep_group_token_counts(
-        self, ctx: "ForwardContext"
-    ) -> tuple[list[int], int]:
-        """Per-``moe.tp_ep_group``-rank token counts for the RSAG comm below.
-
-        Unlike ``CommManager.moe_tp_ep_group_scattered_num_tokens`` (which
-        assumes the incoming hidden_states were already reduce-scattered
-        across ``attn.tp_group``), Kimi-K3's AttnRes path never scatters:
-        every rank in an ``attn.tp_group`` (and ``attn.cp_group``) holds a
-        full, *replicated* copy of its attn-dp-rank's tokens (see
-        ``KimiLinearDecoderLayer._reduce_attn_accumulate`` /
-        ``KimiLinearMLAAttention``'s ``o_proj`` all_reduce). So the token
-        table here must report each attn-dp-rank's *unscattered* count, and
-        only once per dp-rank -- the first ``moe.tp_ep_group`` member seen
-        for a given dp-rank is treated as that dp-rank's representative and
-        contributes the full count; every later member of the same dp-rank
-        contributes 0 rows (it holds a redundant copy, not new data).
-
-        Returns ``(token_counts, local_group_index)`` where
-        ``local_group_index`` is this rank's position in
-        ``moe.tp_ep_group`` and ``token_counts[local_group_index]`` is
-        nonzero iff this rank is its dp-rank's representative.
-        """
-        local_index = self.mapping.moe.tp_ep_group.index(self.mapping.rank)
-        global_counts = (
-            ctx.collective_global_num_tokens
-            if ctx.collective_global_num_tokens is not None
-            else ctx.global_num_tokens
-        )
-        if global_counts is None:
-            # No cross-rank metadata (e.g. single attn-dp group): every rank
-            # in the group belongs to the same (local) dp-rank, so only the
-            # local rank contributes and every other entry is a same-batch
-            # duplicate -- report a single representative's worth of tokens.
-            num_tokens = (
-                ctx.collective_num_tokens
-                if ctx.collective_num_tokens is not None
-                else ctx.input_num_tokens
-            )
-            counts = [0] * self.mapping.moe.tp_ep_size
-            counts[local_index] = num_tokens
-            return counts, local_index
-
-        seen_dp_ranks: dict[int, int] = {}
-        counts = []
-        for i, rank in enumerate(self.mapping.moe.tp_ep_group):
-            dp_rank = self._attn_dp_rank_of(rank)
-            if dp_rank in seen_dp_ranks:
-                counts.append(0)
-                continue
-            seen_dp_ranks[dp_rank] = i
-            # dp-major indexing into global_counts: any tp/cp peer of
-            # dp_rank reports the same (unscattered) count.
-            attn = self.mapping.attn
-            counts.append(global_counts[dp_rank * attn.tp_size * attn.cp_size])
-        return counts, local_index
-
     def _pre_moe_comm(
         self,
         hidden_states: torch.Tensor,
@@ -1377,32 +1314,27 @@ class KimiLinearMoE(nn.Module):
     ) -> torch.Tensor:
         """All-gather replicated per-dp-rank tokens into the MoE-TP-EP group.
 
-        Kimi-K3's attn output is replicated within ``attn.tp_group`` (never
-        reduce-scattered), so this cannot reuse
-        ``CommManager.pre_moe_comm``: that helper's RSAG branch sizes the
-        gather from ``moe_tp_ep_group_scattered_num_tokens``, which assumes
-        each rank already holds a disjoint attn-tp slice. Here every rank
-        instead holds a full copy of its attn-dp-rank's tokens, so the
-        gather must deduplicate per dp-rank (see
-        ``_kimi_moe_tp_ep_group_token_counts``) instead of slicing.
+        Kimi-K3's attn output is replicated across ``attn.tp_group`` (not
+        reduce-scattered), so ``comm_manager.pre_moe_comm`` can't be called
+        directly on it: its RSAG branch expects ``hidden_states`` to already
+        be this rank's disjoint share. This slices out that share first --
+        this rank's even ``attn.tp_rank`` slice of
+        ``attn_tp_group_scattered_num_tokens`` -- then delegates the actual
+        gather to ``comm_manager.pre_moe_comm``. Net effect: same gathered
+        result as before, but send bandwidth is spread across the whole
+        ``attn.tp_group`` instead of piling onto one representative rank.
         """
+        # Mirror comm_manager.pre_moe_comm
         if not self.mapping.moe.has_tp_ep:
             return hidden_states
-        if self.mapping.attn.tp_size == self.mapping.moe.tp_ep_size:
-            # Replicated-token AR topology: every rank's hidden_states is
-            # already the one global copy the routed/shared kernels expect.
+        if comm_manager.use_all_reduce(is_moe=True):
             return hidden_states
 
-        token_counts, local_index = self._kimi_moe_tp_ep_group_token_counts(ctx)
-        if token_counts[local_index] == 0:
-            # Not this dp-rank's representative in the group: contribute no
-            # rows so the gather doesn't double-count the redundant copy.
-            hidden_states = hidden_states[:0]
-        return token_all_gather(
-            hidden_states,
-            group=self.mapping.moe.tp_ep_group,
-            scattered_num_tokens=token_counts,
-        )
+        token_counts = comm_manager.attn_tp_group_scattered_num_tokens(ctx)
+        offset = sum(token_counts[:self.mapping.attn.tp_rank])
+        count = token_counts[self.mapping.attn.tp_rank]
+        hidden_states = hidden_states[offset : offset + count]
+        return comm_manager.pre_moe_comm(hidden_states, ctx)
 
     def _post_moe_comm(
         self,
@@ -1412,33 +1344,17 @@ class KimiLinearMoE(nn.Module):
     ) -> torch.Tensor:
         """Combine MoE-TP-EP partials back into each attn-dp-rank's tokens.
 
-        The all_reduce step is identical to (and reuses)
-        ``comm_ops.all_reduce`` -- every rank's partial spans the same
-        gathered token set, so summing across ``moe.tp_ep_group`` is valid
-        regardless of topology. Only the post-reduce slicing differs from
-        ``CommManager.post_moe_comm``: instead of a ``token_reduce_scatter``
-        keyed by attn-tp slices, this slices the (now fully reduced, still
-        replicated-per-dp-rank) result back to this rank's dp-rank segment,
-        using the same dedup boundaries as ``_pre_moe_comm`` so every rank
-        in an ``attn.tp_group`` reads out an identical copy.
+        ``comm_manager.post_moe_comm`` reduces over ``moe.tp_ep_group``
+        (all-reduce, or reduce-scatter leaving each rank only its own row
+        range). The reduce-scatter case needs one more step to restore the
+        replicated-per-dp-rank layout callers expect: reuse
+        ``comm_manager.post_final_norm_comm``'s ``attn.tp_group`` all-gather
+        (normally used at the attn/dense-TP boundary) to reassemble it,
+        since it's sized from the same per-dp-rank token counts.
         """
-        if not self.mapping.moe.has_tp_ep:
-            return hidden_states
-        reduced = all_reduce(hidden_states, self.mapping.moe.tp_ep_group)
-        if self.mapping.attn.tp_size == self.mapping.moe.tp_ep_size:
-            return reduced
-
-        token_counts, _ = self._kimi_moe_tp_ep_group_token_counts(ctx)
-        local_dp_rank = self._attn_dp_rank_of(self.mapping.rank)
-        offset = 0
-        for rank, count in zip(self.mapping.moe.tp_ep_group, token_counts):
-            if self._attn_dp_rank_of(rank) == local_dp_rank:
-                return reduced[offset : offset + count]
-            offset += count
-        raise AssertionError(
-            "local rank's attn-dp-rank not represented in moe.tp_ep_group "
-            "token table; this should be unreachable"
-        )
+        reduced, _ = comm_manager.post_moe_comm(hidden_states, None, ctx)
+        reduced, _ = comm_manager.post_final_norm_comm(reduced, None, ctx)
+        return reduced
 
     def forward(
         self,
