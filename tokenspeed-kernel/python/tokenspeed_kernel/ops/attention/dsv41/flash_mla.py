@@ -37,25 +37,25 @@ from tokenspeed_kernel.platform import (
 )
 from tokenspeed_kernel.registry import Priority, register_kernel
 from tokenspeed_kernel.signature import dense_tensor_format, format_signature
-
-_FLASH_MLA_API: ModuleType | None = None
-if current_platform().is_hopper_plus:
-    import flash_mla.flash_mla_interface as _FLASH_MLA_API
-    from flash_mla import fused_norm_rope_attn_rope_cast as _fused_v41  # noqa: F401
+from tokenspeed_kernel.thirdparty.flash_mla import (
+    has_flash_mla_v41_api,
+    is_flash_mla_available,
+    load_flash_mla_v41_api,
+)
 
 
 def flash_mla_api() -> ModuleType:
     """Return the optional native V4.1 FlashMLA API."""
-    if _FLASH_MLA_API is None:
+    if not current_platform().is_hopper_plus:
         raise ImportError(
             "FlashMLA V4.1 requires tokenspeed-flashmla with its native CUDA extension"
         )
-    return _FLASH_MLA_API
+    return load_flash_mla_v41_api()
 
 
 def is_flash_mla_v41_available() -> bool:
     """Return whether the optional V4.1 API and native extension are available."""
-    return _FLASH_MLA_API is not None
+    return current_platform().is_hopper_plus and has_flash_mla_v41_api()
 
 
 def new_flashmla_schedule() -> object:
@@ -143,24 +143,6 @@ def _slots(slots, lengths, tokens):
     return slots.contiguous().unsqueeze(1), lengths.to(torch.int32).contiguous()
 
 
-@register_kernel(
-    "attention",
-    "dsv41_selected_attention",
-    name="flashmla_dsv41_selected_attention",
-    solution="flashmla",
-    # Hopper builds carry EXTRA_KVCACHE, EXTRA_TOPK_LENGTH and ATTN_SINK -- the
-    # two-reader shape this op needs -- but of the packed layouts only the V4
-    # cache reader. The caller keeps its rows in a format its target reads, so
-    # the floor is the two-reader feature set rather than any one layout.
-    capability=CapabilityRequirement(
-        min_arch_version=ArchVersion(9, 0),
-        max_arch_version=ArchVersion(10, 3),
-        vendors=frozenset({"nvidia"}),
-    ),
-    signatures=frozenset({format_signature(x=dense_tensor_format(torch.bfloat16))}),
-    traits={"flashmla_eligible": frozenset({True})},
-    priority=Priority.SPECIALIZED,
-)
 def selected_attention(
     q,
     swa_cache,
@@ -305,3 +287,24 @@ def selected_attention(
         return result
     out.copy_(result)
     return out
+
+
+if current_platform().is_hopper_plus and is_flash_mla_available():
+    register_kernel(
+        "attention",
+        "dsv41_selected_attention",
+        name="flashmla_dsv41_selected_attention",
+        solution="flashmla",
+        # Hopper builds carry EXTRA_KVCACHE, EXTRA_TOPK_LENGTH and ATTN_SINK -- the
+        # two-reader shape this op needs -- but of the packed layouts only the V4
+        # cache reader. The caller keeps its rows in a format its target reads, so
+        # the floor is the two-reader feature set rather than any one layout.
+        capability=CapabilityRequirement(
+            min_arch_version=ArchVersion(9, 0),
+            max_arch_version=ArchVersion(10, 3),
+            vendors=frozenset({"nvidia"}),
+        ),
+        signatures=frozenset({format_signature(x=dense_tensor_format(torch.bfloat16))}),
+        traits={"flashmla_eligible": frozenset({True})},
+        priority=Priority.SPECIALIZED,
+    )(selected_attention)

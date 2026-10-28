@@ -50,6 +50,7 @@ from tokenspeed_kernel.platform import (
 )
 from tokenspeed_kernel.registry import Priority, register_kernel
 from tokenspeed_kernel.signature import dense_tensor_format, format_signature
+from tokenspeed_kernel.thirdparty.flash_mla import is_flash_mla_available
 
 __all__ = [
     "has_ragged_decode_topk",
@@ -244,7 +245,7 @@ def _finish_sparse_attention(
     return (result, lse) if return_lse else result
 
 
-if platform.is_nvidia and platform.is_hopper_plus:
+if platform.is_nvidia and platform.is_hopper_plus and is_flash_mla_available():
 
     @register_kernel(
         "attention",
@@ -329,7 +330,7 @@ if platform.is_nvidia and platform.is_hopper_plus:
         return _finish_sparse_attention(result, lse, slots, out, return_lse)
 
 
-if platform.is_nvidia and platform.is_hopper_plus:
+if platform.is_nvidia and platform.is_hopper_plus and is_flash_mla_available():
 
     @register_kernel(
         "attention",

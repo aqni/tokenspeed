@@ -34,6 +34,7 @@ from tokenspeed_kernel.ops.attention.mha.flashinfer import (
 from tokenspeed_kernel.ops.attention.mla.cuda import (
     flash_mla_with_kvcache,
     get_mla_metadata,
+    load_flash_mla,
 )
 
 from tokenspeed.runtime.configs.model_config import AttentionArch
@@ -145,6 +146,7 @@ class FlashMLABackend(PagedAttentionBackend):
     default_kernel_page_size = PAGE_SIZE
 
     def __init__(self, config: AttnConfig, spec: MLAConfig, *, kernel_page_size: int):
+        load_flash_mla()
         if kernel_page_size != PAGE_SIZE:
             raise ValueError(
                 f"FlashMLA walks pages at a fixed {PAGE_SIZE}-token stride, "

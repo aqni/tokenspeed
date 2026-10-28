@@ -24,6 +24,20 @@ the online softmax; unused entries remain `-1`.
 Portable Triton implementations remain the fallback for trait combinations
 without a matching native registration.
 
+## Optional FlashMLA backend
+
+Importing the attention families does not load FlashMLA's native extension.
+DSA, DSV4 and V4.1 register FlashMLA implementations only when its package is
+present on a supported platform. The first FlashMLA call loads the extension;
+selecting the runtime `flashmla` backend loads it during backend construction.
+Missing-package errors are explicit, and native ABI errors are propagated.
+An installed package is not proof of native compatibility.
+
+The V4.1 API is checked only when V4.1 requests it; a build without that API
+can still serve ordinary FlashMLA DSA. Other implementations, including
+batch-invariant plugin kernels, do not require FlashMLA to be installed.
+Kernel selection and numerical capability requirements remain unchanged.
+
 ## DCP local candidate selection
 
 `deep_gemm_dsa_index_candidates` scores compact owned Index-K pages. On

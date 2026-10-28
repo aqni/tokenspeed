@@ -28,6 +28,7 @@ from tokenspeed_kernel.platform import (
 )
 from tokenspeed_kernel.registry import Priority, error_fn, register_kernel
 from tokenspeed_kernel.signature import dense_tensor_format, format_signature
+from tokenspeed_kernel.thirdparty.flash_mla import is_flash_mla_available
 
 platform = current_platform()
 
@@ -195,7 +196,7 @@ def _dsv4_fp8_row_bytes(head_dim: int, rope_dim: int = 64) -> int:
     return nope_dim + 2 * int(rope_dim) + nope_dim // 64 + 1
 
 
-if platform.is_nvidia and platform.is_hopper_plus:
+if platform.is_nvidia and platform.is_hopper_plus and is_flash_mla_available():
 
     @register_kernel(
         "attention",
@@ -289,7 +290,7 @@ if platform.is_nvidia and platform.is_hopper_plus:
         return (result, lse) if return_lse else result
 
 
-if platform.is_nvidia and platform.is_hopper_plus:
+if platform.is_nvidia and platform.is_hopper_plus and is_flash_mla_available():
 
     @register_kernel(
         "attention",
