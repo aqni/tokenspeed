@@ -11,6 +11,13 @@ performant kernels for multi-silicon AI inference. It features:
 TokenSpeed-kernel is pip-installable on its own. Others can use it
 directly.
 
+Native backend registration tolerates missing TRT-LLM, DeepGEMM, FlashKDA,
+and Fast Hadamard packages in the guarded implementations. Unavailable
+implementations are skipped; explicitly calling the TRT-LLM projection or
+FP8 quantization helper reports the missing dependency. Installed packages
+must still be compatible with the runtime, and their import errors propagate.
+This does not make every native dependency optional across all kernel families.
+
 ## Public API
 
 ```python
