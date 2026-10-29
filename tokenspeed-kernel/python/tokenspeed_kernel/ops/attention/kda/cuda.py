@@ -33,6 +33,7 @@ microseconds against a multi-ms forward).
 
 from __future__ import annotations
 
+import importlib.util
 import math
 
 import torch
@@ -50,7 +51,13 @@ from tokenspeed_kernel.registry import Priority, register_kernel
 
 platform = current_platform()
 
-if platform.is_nvidia and platform.is_hopper_plus:
+_HAS_FLASH_KDA = (
+    platform.is_nvidia
+    and platform.is_hopper_plus
+    and importlib.util.find_spec("flash_kda") is not None
+)
+
+if _HAS_FLASH_KDA:
     from flash_kda import fwd as flash_kda_fwd
 
 __all__ = ["flash_kda_chunk_prefill"]

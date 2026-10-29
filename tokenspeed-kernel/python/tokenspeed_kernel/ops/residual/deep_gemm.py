@@ -20,6 +20,8 @@
 
 from __future__ import annotations
 
+import importlib.util
+
 import torch
 from tokenspeed_kernel.ops.residual.triton import (
     _mhc_mixes_impl,
@@ -37,6 +39,7 @@ from tokenspeed_kernel.registry import Priority, register_kernel
 from tokenspeed_kernel.signature import dense_tensor_format, format_signature
 
 platform = current_platform()
+_HAS_DEEP_GEMM = importlib.util.find_spec("deep_gemm") is not None
 
 
 def mega_mhc_eligible(
@@ -128,7 +131,7 @@ def deep_gemm_mhc_shifted_post_pre_norm(
     )
 
 
-if platform.is_hopper_plus:
+if platform.is_hopper_plus and _HAS_DEEP_GEMM:
     prepare_cuda_toolkit_env()
     from deep_gemm import (
         get_pdl,

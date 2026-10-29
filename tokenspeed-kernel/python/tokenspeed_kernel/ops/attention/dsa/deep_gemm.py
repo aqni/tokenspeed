@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import functools
+import importlib.util
 import os
 
 import torch
@@ -276,11 +277,23 @@ def _resolve_prefill_tile_max_seqlen_k(
     return int(candidate_lens[start:end].max().item())
 
 
-if platform.is_hopper_plus:
+_HAS_DEEP_GEMM = (
+    platform.is_hopper_plus and importlib.util.find_spec("deep_gemm") is not None
+)
+_HAS_TRTLLM_KERNEL = (
+    importlib.util.find_spec("trtllm_kernel") is not None
+    and importlib.util.find_spec("deep_ep") is not None
+)
+
+if _HAS_DEEP_GEMM:
     prepare_cuda_toolkit_env()
-    import deep_ep  # noqa: F401
+    if _HAS_TRTLLM_KERNEL:
+        # DeepEP must initialize before TRT-LLM's static CUDA runtime.
+        import deep_ep  # noqa: F401
     import deep_gemm
-    import trtllm_kernel  # noqa: F401
+
+    if _HAS_TRTLLM_KERNEL:
+        import trtllm_kernel  # noqa: F401
 
     def _deep_gemm_paged_mqa_plan(
         *,
@@ -698,7 +711,7 @@ if platform.is_hopper_plus:
         return out, lens_out
 
 
-if platform.is_hopper_plus:
+if _HAS_DEEP_GEMM:
 
     @register_kernel(
         "attention",
