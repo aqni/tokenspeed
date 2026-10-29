@@ -148,7 +148,7 @@ numerics.mode                       --numerics {auto, rl-bitwise}
 │   │                               batch_invariant=True); the tuned top-k
 │   │                               kernels switch algorithm and CTA split
 │   │                               with the row count, which moves ties
-│   ├── position-order reduction    dsa_slot_order=sorted: a token's selected
+│   ├── explicit reduction order    dsa_slot_order=sorted by default: selected
 │   │                               KV rows are reduced in ascending POSITION
 │   │                               order, not in the top-k leaf's tie order
 │   │                               and never in physical slot order (a
@@ -159,8 +159,10 @@ numerics.mode                       --numerics {auto, rl-bitwise}
 │   │                               emits that order (dsa_decode_topk /
 │   │                               dsa_prefill_topk slot_order trait) and the
 │   │                               sparse core keeps it (dsa_decode /
-│   │                               dsa_prefill slot_order trait); silent
-│   │                               kernels are refused rather than assumed
+│   │                               dsa_prefill slot_order trait). Explicit
+│   │                               selection retains the selector's order;
+│   │                               both require batch-invariant leaves.
+│   │                               Silent kernels are refused, not assumed
 │   └── per-row GEMMs               fixed-order GEMM leaves (see plans below)
 ├── logprob.topology-invariant      (deferred) TP-invariant projection
 │                                   layouts on top of the vocab-block
@@ -189,6 +191,20 @@ setting is fixed in each expert plan before warmup and CUDA graph capture.
 
 ## alignment.trainer
 
+Trainer operation order is explicit where trainers differ. `--dsa-slot-order`
+defaults to `sorted` under `rl-bitwise` and `selection` under `auto`, but an
+explicit choice is preserved. Strict DSA plans still require batch-invariant
+selection and attention leaves for either order. `selection` keeps the
+selector's stable layout; it never sorts physical cache addresses.
+
+For `deepseek_yarn`, `rope_scaling.frequency_device` optionally specifies the
+device used for powers, divisions and interpolation independently of
+`--yarn-ramp-mask-device`. Omission retains the original whole-table device.
+The ramp is copied to the frequency device before interpolation, and the
+resulting table is copied to the model device. Both choices participate in
+the RoPE cache identity. This supports a trainer that computes frequencies
+on CUDA and its ramp on CPU without changing other models' tables.
+
 The invariance layers make a deployment agree with itself. Trainer alignment
 makes it agree with a different program: the training framework's forward,
 whose arithmetic was never written to match an inference engine. Each switch
@@ -201,7 +217,7 @@ and only the reported log-probabilities change.
 | Switch | Trainer form | Changes |
 | --- | --- | --- |
 | `--sampling-stream per-request` | Non-greedy rows draw from a Philox stream keyed by `(request seed, position)` only (`sampling.deterministic` above); the trainer plays back the sampled ids, so this is an invariance switch rather than an alignment one — T>0 rollouts need it | tokens at T>0 (not logprobs) |
-| `--yarn-ramp-mask-device cpu` | The whole `inv_freq` table of `deepseek_yarn` RoPE — position frequencies, both divisions and the YaRN linear ramp mask — is computed on the host and copied to the device once, as the trainer builds its `inv_freq` on the host; CPU and CUDA division round differently at ulp level, and every rotated q/k inherits the difference | forward values |
+| `--yarn-ramp-mask-device cpu` | The YaRN linear ramp mask is computed on CPU. Unless `rope_scaling.frequency_device` is explicitly supplied, powers, divisions and interpolation also run on CPU and the complete `inv_freq` table moves to the model device once. An explicit frequency device keeps the CPU ramp but performs those other operations on the chosen device. CPU and CUDA arithmetic can round differently at ulp level, and every rotated q/k inherits the difference | forward values |
 | `--mla-lora-scale runtime` | The `sqrt(hidden / lora_rank)` norm scales of LongCat-style MLA stay out of the `q_a_layernorm` / `kv_a_layernorm` weights and multiply `q` after `q_b_proj` and the latent after `kv_a_layernorm` in bf16, as the trainer does; the DSA indexer reads the unscaled `q_lora` | forward values |
 | `--layer-boundary-norm unfused` | The norm that opens each physical layer and the final norm read a bf16 `hidden + residual` materialized first (`residual = hidden`), then a standalone RMSNorm, instead of the fused add+norm kernel whose sum stays fp32; all-reduce+norm fusion is vetoed with it | forward values |
 | `--router-topk torch` | The correction-bias router runs fp32 `torch.softmax`, `torch.topk(probs + bias, sorted=True)` (PyTorch tie order), weights = unbiased probs x `routed_scaling_factor`, zero experts (`id >= num_real`) become `-1` and keep their weight for the identity residual | forward values (expert selection at near-ties, weights) |
