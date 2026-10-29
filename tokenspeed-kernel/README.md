@@ -18,6 +18,11 @@ FP8 quantization helper reports the missing dependency. Installed packages
 must still be compatible with the runtime, and their import errors propagate.
 This does not make every native dependency optional across all kernel families.
 
+The vendored CUDA routing, sampling, and softmax kernels share reduction
+operators selected by the CCCL header version. CCCL releases before 2.8 use
+CUB operators; newer releases use CUDA operators. This supports building the
+same reductions with CUDA 12.8 without changing their algorithms.
+
 ## Public API
 
 ```python
