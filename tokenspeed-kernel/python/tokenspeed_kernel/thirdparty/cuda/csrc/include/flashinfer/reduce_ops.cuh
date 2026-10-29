@@ -21,15 +21,19 @@
 #ifndef FLASHINFER_REDUCE_OPS_CUH_
 #define FLASHINFER_REDUCE_OPS_CUH_
 
-#include <cub/thread/thread_operators.cuh>
-#include <cuda/functional>
 #include <cuda/version>
+
+#if defined(CCCL_VERSION) && CCCL_VERSION >= 2008000
+#include <cuda/functional>
+#else
+#include <cub/thread/thread_operators.cuh>
+#endif
 
 namespace flashinfer {
 
 // CCCL can be upgraded independently of the CUDA Toolkit.
 // cuda::maximum/minimum are available starting with CCCL 2.8.
-#if CCCL_VERSION >= 2008000
+#if defined(CCCL_VERSION) && CCCL_VERSION >= 2008000
 using MaxReduceOp = cuda::maximum<>;
 using MinReduceOp = cuda::minimum<>;
 #else
