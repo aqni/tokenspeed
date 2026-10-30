@@ -8,11 +8,13 @@ and backend choices against the build you deploy.
 
 ## Transformers compatibility
 
-The configuration loader supports Transformers 4.56.2 and 5.12.0. MiniMax-M3 and Nemotron-H
-configuration wrappers require their corresponding Transformers model modules
-(for example, the modules shipped with 5.12.0). Older installations can load
-other model families; selecting an unavailable family raises an explicit
-ImportError instead of failing while importing the runtime.
+The configuration loader supports Transformers 4.56.2 and 5.12.0. MiniMax-M3 and
+Nemotron-H require their corresponding Transformers model modules (for example,
+those shipped with 5.12.0). Older installations skip their model implementations
+and the EAGLE-4, Parakeet, and RADIO modules that share those blocks. Other model families
+remain available. Selecting an unavailable configuration raises an explicit
+ImportError instead of failing while importing the runtime. Model modules whose
+dependencies are available still fail immediately on import errors.
 
 CUDA kernel source builds support TVM FFI 0.1.6 through the 0.1 series.
 Pin the desired version before a build with `--no-build-isolation` so the native

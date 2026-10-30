@@ -21,6 +21,7 @@
 """Model registry helpers for resolving runtime model entry classes."""
 
 import importlib
+import importlib.util
 import pkgutil
 from collections.abc import Set
 from dataclasses import dataclass, field
@@ -35,6 +36,18 @@ from tokenspeed.runtime.plugins.registry import (
 from tokenspeed.runtime.utils import get_colorful_logger
 
 logger = get_colorful_logger(__name__)
+
+# These modules also import the optional families through shared model blocks.
+_OPTIONAL_MODEL_DEPENDENCIES = {
+    "llama_eagle4": "transformers.models.nemotron_h",
+    "minimax_m3": "transformers.models.minimax_m3_vl",
+    "minimax_m3_dspark": "transformers.models.minimax_m3_vl",
+    "nemotron_h": "transformers.models.nemotron_h",
+    "nemotron_h_nextn": "transformers.models.nemotron_h",
+    "nemotron_omni": "transformers.models.nemotron_h",
+    "parakeet": "transformers.models.nemotron_h",
+    "radio": "transformers.models.nemotron_h",
+}
 
 
 @dataclass
@@ -105,6 +118,10 @@ def import_model_classes():
     package = importlib.import_module(package_name)
 
     for _, name, _ in pkgutil.iter_modules(package.__path__, package_name + "."):
+        dependency = _OPTIONAL_MODEL_DEPENDENCIES.get(name.rsplit(".", 1)[-1])
+        if dependency is not None and importlib.util.find_spec(dependency) is None:
+            logger.info(f"Skipping model module {name}: requires {dependency}")
+            continue
 
         try:
             module = importlib.import_module(name)

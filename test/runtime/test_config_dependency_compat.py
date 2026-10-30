@@ -73,3 +73,15 @@ def test_unavailable_model_family_has_dependency_error(tmp_path, model_type, fam
     (tmp_path / "config.json").write_text(json.dumps({"model_type": model_type}))
     with pytest.raises(ImportError, match=family):
         get_config(str(tmp_path), trust_remote_code=False)
+
+
+@pytest.mark.parametrize(
+    "architecture",
+    ["LlamaForCausalLM", "Qwen3ForCausalLM", "DeepseekV3ForCausalLM"],
+)
+def test_model_registry_resolves_available_architecture(architecture):
+    from tokenspeed.runtime.models.registry import ModelRegistry
+
+    model_class, resolved = ModelRegistry.resolve_model_cls(architecture)
+    assert resolved == architecture
+    assert model_class.__name__ == architecture
