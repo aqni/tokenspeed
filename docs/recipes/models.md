@@ -6,6 +6,21 @@ set only the parameters that change runtime behavior.
 The commands below are templates. Validate exact model IDs, checkpoint formats,
 and backend choices against the build you deploy.
 
+## Transformers compatibility
+
+The configuration loader supports Transformers 4.56.2 and 5.12.0. MiniMax-M3 and Nemotron-H
+configuration wrappers require their corresponding Transformers model modules
+(for example, the modules shipped with 5.12.0). Older installations can load
+other model families; selecting an unavailable family raises an explicit
+ImportError instead of failing while importing the runtime.
+
+CUDA kernel source builds support TVM FFI 0.1.6 through the 0.1 series.
+Pin the desired version before a build with `--no-build-isolation` so the native
+extensions use its headers. Build isolation uses the build-system dependency range; it does not inherit a
+runtime pin. Optional kernel libraries can require newer Python helpers even
+when their native C ABI is compatible. Validate those libraries separately;
+a dependency pin alone does not establish their Python API compatibility.
+
 ## Muse Spark Open
 
 [Muse Spark Open](https://huggingface.co/meta-models/Muse-Spark-Open-816B-A42B)

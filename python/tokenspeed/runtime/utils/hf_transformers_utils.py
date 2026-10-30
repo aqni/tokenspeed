@@ -22,6 +22,7 @@
 
 import contextlib
 import copy
+import importlib
 import importlib.util
 import json
 import logging
@@ -53,7 +54,6 @@ from tokenspeed.runtime.configs import (
     KimiK3Config,
     KimiK3DSparkConfig,
     KimiK25Config,
-    MiniMaxM3Config,
     MuseSparkConfig,
     Qwen3_5Config,
     Qwen3_5MoeConfig,
@@ -67,8 +67,6 @@ from tokenspeed.runtime.configs import (
 from tokenspeed.runtime.configs.beam_config import BeamConfig
 from tokenspeed.runtime.configs.dots3_note_config import Dots3NoteConfig
 from tokenspeed.runtime.configs.glm53_flash_config import Glm53FlashConfig
-from tokenspeed.runtime.configs.nemotron_h_config import NemotronHConfig
-from tokenspeed.runtime.configs.nemotron_omni_config import NemotronHOmniConfig
 from tokenspeed.runtime.hf_hub_retry import call_with_hf_rate_limit_retry
 from tokenspeed.runtime.utils import lru_cache_frozenset
 
@@ -90,7 +88,6 @@ _CONFIG_REGISTRY: dict[str, type[PretrainedConfig]] = {
     Qwen3_5MoeTextConfig.model_type: Qwen3_5MoeTextConfig,
     Qwen4ExpConfig.model_type: Qwen4ExpConfig,
     Qwen4ExpTextConfig.model_type: Qwen4ExpTextConfig,
-    MiniMaxM3Config.model_type: MiniMaxM3Config,
     KimiK2Config.model_type: KimiK2Config,
     KimiK25Config.model_type: KimiK25Config,
     KimiK3Config.model_type: KimiK3Config,
@@ -98,12 +95,32 @@ _CONFIG_REGISTRY: dict[str, type[PretrainedConfig]] = {
     InklingModelConfig.model_type: InklingModelConfig,
     InklingMMConfig.model_type: InklingMMConfig,
     Glm53FlashConfig.model_type: Glm53FlashConfig,
-    NemotronHConfig.model_type: NemotronHConfig,
-    NemotronHOmniConfig.model_type: NemotronHOmniConfig,
     MuseSparkConfig.model_type: MuseSparkConfig,
-    "nemotron_h_omni": NemotronHOmniConfig,
     "glm5_next": Glm53FlashConfig,
 }
+
+# These wrappers inherit configuration classes that older Transformers lacks.
+# Register available families normally, and reject unavailable ones when selected.
+_OPTIONAL_CONFIGS = {
+    "minimax_m3_vl": ("minimax_m3_vl", "minimax_m3_config", "MiniMaxM3Config"),
+    "nemotron_h": ("nemotron_h", "nemotron_h_config", "NemotronHConfig"),
+    "NemotronH_Nano_Omni_Reasoning_V3": (
+        "nemotron_h",
+        "nemotron_omni_config",
+        "NemotronHOmniConfig",
+    ),
+    "nemotron_h_omni": ("nemotron_h", "nemotron_omni_config", "NemotronHOmniConfig"),
+}
+_UNAVAILABLE_CONFIGS: dict[str, str] = {}
+for _model_type, (_hf_family, _module, _class_name) in _OPTIONAL_CONFIGS.items():
+    _dependency = f"transformers.models.{_hf_family}"
+    if importlib.util.find_spec(_dependency) is None:
+        _UNAVAILABLE_CONFIGS[_model_type] = _dependency
+    else:
+        _config_module = importlib.import_module(
+            f"tokenspeed.runtime.configs.{_module}"
+        )
+        _CONFIG_REGISTRY[_model_type] = getattr(_config_module, _class_name)
 
 # Config classes for checkpoints identified by architecture rather than
 # ``model_type`` (a plugin checkpoint's config.json may carry none). Filled by
@@ -120,6 +137,13 @@ def _resolve_registered_config(
     first ``architectures`` entry.
     """
     model_type = raw_config.get("model_type", "llama")
+    if model_type in _UNAVAILABLE_CONFIGS:
+        dependency = _UNAVAILABLE_CONFIGS[model_type]
+        raise ImportError(
+            f"Model type {model_type!r} requires {dependency}; "
+            "install a Transformers release that provides this model family "
+            "(for example 5.12.0)."
+        )
     if model_type in _CONFIG_REGISTRY:
         return _CONFIG_REGISTRY[model_type]
     architectures = raw_config.get("architectures") or ()

@@ -40,7 +40,6 @@ from tokenspeed.runtime.configs.kimi_k3_config import (
 )
 from tokenspeed.runtime.configs.kimi_k3_dspark_config import KimiK3DSparkConfig
 from tokenspeed.runtime.configs.kimi_k25_config import KimiK25Config
-from tokenspeed.runtime.configs.minimax_m3_config import MiniMaxM3Config
 from tokenspeed.runtime.configs.muse_spark_config import MuseSparkConfig
 from tokenspeed.runtime.configs.qwen3_5_config import (
     Qwen3_5Config,
@@ -89,3 +88,12 @@ __all__ = [
     "InklingVisionConfig",
     "MuseSparkConfig",
 ]
+
+
+def __getattr__(name: str):
+    # Keep configurations for newer Transformers optional for unrelated models.
+    if name == "MiniMaxM3Config":
+        from tokenspeed.runtime.configs.minimax_m3_config import MiniMaxM3Config
+
+        return MiniMaxM3Config
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
