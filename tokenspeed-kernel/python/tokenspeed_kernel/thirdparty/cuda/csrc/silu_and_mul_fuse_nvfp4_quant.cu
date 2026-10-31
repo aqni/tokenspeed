@@ -33,6 +33,8 @@
  */
 
 #include <cfloat>
+#include <cuda_bf16.h>
+#include <cuda_fp16.h>
 #include <cuda_runtime.h>
 
 #include "tvm_ffi_utils.h"
