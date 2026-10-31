@@ -16,6 +16,10 @@ remain available. Selecting an unavailable configuration raises an explicit
 ImportError instead of failing while importing the runtime. Model modules whose
 dependencies are available still fail immediately on import errors.
 
+Tokenizer reconciliation appends missing flagged special tokens using the shared
+positional append argument, whose keyword differs between Transformers 4 and 5.
+It preserves registered special tokens, vocabulary IDs, and turn-final stop IDs.
+
 CUDA kernel source builds support TVM FFI 0.1.6 through the 0.1 series.
 Pin the desired version before a build with `--no-build-isolation` so the native
 extensions use its headers. Build isolation uses the build-system dependency range; it does not inherit a

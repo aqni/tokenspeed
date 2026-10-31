@@ -23,6 +23,9 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+from tokenizers import AddedToken, Tokenizer
+from tokenizers.models import WordLevel
+from transformers import PreTrainedTokenizerFast
 
 from tokenspeed.runtime.utils.hf_transformers_utils import reconcile_special_tokens
 
@@ -53,6 +56,36 @@ def test_reconcile_special_tokens_stops_on_eot_but_not_eom(
     )
     reconcile_special_tokens(tokenizer)
     assert tokenizer.additional_stop_token_ids == stop_ids
+
+
+@pytest.mark.parametrize("already_in_vocab", [False, True])
+def test_reconcile_special_tokens_preserves_registered_tokens(already_in_vocab):
+    vocab = {"[UNK]": 0, "ordinary": 1, "<known>": 2}
+    if already_in_vocab:
+        vocab.update({"<flagged>": 3, "<|eot|>": 4})
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=Tokenizer(WordLevel(vocab, unk_token="[UNK]")),
+        unk_token="[UNK]",
+        additional_special_tokens=["<known>"],
+    )
+    tokenizer.add_tokens(
+        [AddedToken("<flagged>", special=True), AddedToken("<|eot|>", special=True)]
+    )
+    flagged = tokenizer.convert_tokens_to_ids(["<flagged>", "<|eot|>"])
+    known = set(tokenizer.all_special_ids)
+    assert known.isdisjoint(flagged)
+    before = tokenizer.get_vocab()
+
+    reconcile_special_tokens(tokenizer)
+    reconcile_special_tokens(tokenizer)
+
+    assert known.union(flagged).issubset(tokenizer.all_special_ids)
+    assert tokenizer.get_vocab() == before
+    assert tokenizer.additional_stop_token_ids == {flagged[1]}
+    ids = tokenizer.convert_tokens_to_ids(
+        ["<known>", "<flagged>", "<|eot|>", "ordinary"]
+    )
+    assert tokenizer.decode(ids, skip_special_tokens=True) == "ordinary"
 
 
 if __name__ == "__main__":
