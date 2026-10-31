@@ -25,6 +25,10 @@ older TVM FFI headers. NVFP4's TensorRT helper headers are required only when
 compiling SM100 device code; Hopper builds can use older FlashInfer wheels.
 Its scalar dispatch includes CUDA's half and bfloat16 headers directly.
 
+Older FlashInfer wheels without the managed tuning/cache protocol use default
+tactics; normal kernel warmup remains enabled. Explicit tuning buckets or
+rounding options require the managed backend and fail when it is unavailable.
+
 ## Public API
 
 ```python

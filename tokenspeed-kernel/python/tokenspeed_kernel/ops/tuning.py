@@ -55,6 +55,24 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
+# Importable older FlashInfer releases do not provide the managed tuning
+# protocol below. Keep normal kernel warmup and their default tactics usable.
+if _autotuner is not None:
+    _tuner_class = getattr(_autotuner, "AutoTuner", None)
+    _managed_api_available = all(
+        callable(getattr(_autotuner, name, None))
+        for name in ("set_autotune_process_group", "_collect_metadata")
+    ) and all(
+        callable(getattr(_tuner_class, name, None))
+        for name in ("load_configs", "save_configs")
+    )
+    if not _managed_api_available:
+        logger.warning(
+            "FlashInfer lacks the managed autotune protocol; using default "
+            "tactics while keeping kernel warmup enabled."
+        )
+        _autotuner = None
+
 _DEFAULT_AUTOTUNE_MAX_NUM_TOKENS = 8192
 _AUTOTUNE_CACHE_DIR_ENV = "TOKENSPEED_FLASHINFER_AUTOTUNE_CACHE_DIR"
 
@@ -281,6 +299,11 @@ def autotune(
         error.
     """
     if _autotuner is None:
+        if tuning_buckets is not None or round_up is not None:
+            raise RuntimeError(
+                "Explicit autotune buckets require a compatible FlashInfer "
+                "managed autotune backend"
+            )
         yield
         return
     if tune_mode:
