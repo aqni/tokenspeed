@@ -617,7 +617,13 @@ class AutoBackend(CommBackend):
         if prepared is not None:
             # Growing would move scratch that captured graphs hold.
             return prepared.max_rows >= max_rows
-        from tokenspeed_kernel.ops.communication.cuda import TokenSpeedA2ALamportState
+        from tokenspeed_kernel.ops.communication.cuda import (
+            TokenSpeedA2ALamportState,
+            tokenspeed_a2a_lamport_supported,
+        )
+
+        if not tokenspeed_a2a_lamport_supported():
+            return False
 
         device = torch.device("cuda", torch.cuda.current_device())
         sms = torch.cuda.get_device_properties(device).multi_processor_count
@@ -676,11 +682,16 @@ class AutoBackend(CommBackend):
         large-message and unsupported-topology paths return to this backend;
         batch-invariant reductions retain the rank-ordered fold at every size.
         """
+        from tokenspeed_kernel.ops.communication.cuda import (
+            tokenspeed_a2a_lamport_supported,
+        )
+
         use_lamport = (
             current_platform().is_nvidia
             and spec.device.type == "cuda"
             and spec.dtype == torch.bfloat16
             and not self._force_deterministic_rsag()
+            and tokenspeed_a2a_lamport_supported()
         )
         batch_invariant = self._batch_invariant_collectives()
         return self._projection.prepare(

@@ -37,6 +37,17 @@ from tokenspeed_kernel.registry import register_kernel
 from tokenspeed_kernel.signature import format_signatures
 
 
+def tokenspeed_a2a_lamport_supported() -> bool:
+    """Return whether the installed JIT dependencies support Lamport A2A.
+
+    This local capability check allocates no symmetric memory. Runtime callers
+    can retain their ordinary collective when the optional native API is absent.
+    """
+    from tokenspeed_kernel.thirdparty.flashinfer.jit import cuda_device_guard_available
+
+    return cuda_device_guard_available()
+
+
 class TokenSpeedA2ALamportState:
     """Persistent TP2/4/8 scratch, initialized collectively before graph capture.
 
@@ -80,6 +91,10 @@ class TokenSpeedA2ALamportState:
             <= torch.cuda.get_device_properties(device).multi_processor_count
         ):
             raise ValueError("Grid must be positive and no larger than the SM count")
+        if not tokenspeed_a2a_lamport_supported():
+            raise RuntimeError(
+                "Lamport A2A requires FlashInfer JIT and the TVM-FFI CUDADeviceGuard header"
+            )
         self.group = group
         self.rank = group.rank()
         self.max_rows = max_rows

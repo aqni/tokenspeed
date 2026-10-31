@@ -333,7 +333,11 @@ Preparation binds each Linear and its workspace to the selected communication
 backend; forward operations dispatch through that same backend.
 Generic projection operations use the backend's ordinary collectives.
 `AutoBackend` composes the optimized projection dispatcher and reuses those
-generic operations for fallback.
+generic operations for fallback. Optional Lamport exchanges require the
+installed FlashInfer JIT and TVM-FFI CUDA device-guard header. Capability is
+checked before symmetric-memory allocation; unsupported toolchains retain NCCL
+for the same token/channel exchange, preserving all payload bits and layouts.
+An explicitly constructed Lamport state instead reports the missing capability.
 Sequential layers share model-private scratch on one stream, sized for the
 largest projection; matching configurations also share native resources.
 Concurrent streams or models use separate workspaces. Intermediate tensors

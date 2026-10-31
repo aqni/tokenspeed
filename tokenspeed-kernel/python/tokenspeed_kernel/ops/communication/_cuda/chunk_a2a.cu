@@ -20,6 +20,7 @@
 
 #include "a2a_fp8.cuh"
 #include "tvm_ffi_utils.h"
+#include <tvm/ffi/extra/cuda/device_guard.h>
 #include <cstdint>
 #include <cuda_runtime.h>
 

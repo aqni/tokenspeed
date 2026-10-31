@@ -34,11 +34,13 @@ from tokenspeed_kernel.ops.communication._cuda.lamport_a2a import (
     tokenspeed_a2a_lamport,
     tokenspeed_a2a_lamport_fp8,
     tokenspeed_a2a_lamport_fp8_quantize,
+    tokenspeed_a2a_lamport_supported,
 )
 
 __all__ = [
     "TokenSpeedA2ALamportState",
     "tokenspeed_a2a_lamport",
+    "tokenspeed_a2a_lamport_supported",
     "tokenspeed_a2a_lamport_fp8",
     "tokenspeed_a2a_lamport_fp8_quantize",
 ]

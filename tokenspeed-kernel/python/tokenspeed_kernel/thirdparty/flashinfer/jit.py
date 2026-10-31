@@ -20,6 +20,22 @@
 
 """Optional FlashInfer JIT/FFI utilities for TokenSpeed-owned CUDA sources."""
 
+from pathlib import Path
+
+
+def cuda_device_guard_available() -> bool:
+    """Return whether optional JIT dependencies provide the CUDA guard header.
+
+    Header capability, rather than package version, controls native paths that
+    use CUDADeviceGuard. Compiler and runtime failures still propagate.
+    """
+    try:
+        from flashinfer.jit.core import gen_jit_spec  # noqa: F401
+        from tvm_ffi.libinfo import find_include_path
+    except ImportError:
+        return False
+    return (Path(find_include_path()) / "tvm/ffi/extra/cuda/device_guard.h").is_file()
+
 
 def build_cuda_module(name, sources):
     """Compile and load sources on first use, before CUDA graph capture.
