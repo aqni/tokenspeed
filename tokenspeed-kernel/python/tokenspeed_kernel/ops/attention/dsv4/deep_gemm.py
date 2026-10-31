@@ -25,12 +25,9 @@ import importlib.util
 import torch
 from tokenspeed_kernel.platform import current_platform, prepare_cuda_toolkit_env
 
-_HAS_DEEP_GEMM = (
-    current_platform().is_hopper_plus
-    and importlib.util.find_spec("deep_gemm") is not None
-)
+_IS_HOPPER_PLUS = current_platform().is_hopper_plus
 
-if _HAS_DEEP_GEMM:
+if _IS_HOPPER_PLUS and importlib.util.find_spec("deep_gemm") is not None:
     prepare_cuda_toolkit_env()
     import deep_gemm
 

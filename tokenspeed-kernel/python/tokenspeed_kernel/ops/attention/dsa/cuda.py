@@ -59,11 +59,6 @@ __all__ = [
 ]
 
 platform = current_platform()
-_HAS_FLASH_MLA = (
-    platform.is_nvidia
-    and platform.is_hopper_plus
-    and importlib.util.find_spec("flash_mla") is not None
-)
 
 if platform.is_hopper_plus:
     from tokenspeed_kernel.ops.attention.mla.cuda import (
@@ -251,7 +246,11 @@ def _finish_sparse_attention(
     return (result, lse) if return_lse else result
 
 
-if _HAS_FLASH_MLA:
+if (
+    platform.is_nvidia
+    and platform.is_hopper_plus
+    and importlib.util.find_spec("flash_mla") is not None
+):
 
     @register_kernel(
         "attention",
@@ -336,7 +335,11 @@ if _HAS_FLASH_MLA:
         return _finish_sparse_attention(result, lse, slots, out, return_lse)
 
 
-if _HAS_FLASH_MLA:
+if (
+    platform.is_nvidia
+    and platform.is_hopper_plus
+    and importlib.util.find_spec("flash_mla") is not None
+):
 
     @register_kernel(
         "attention",

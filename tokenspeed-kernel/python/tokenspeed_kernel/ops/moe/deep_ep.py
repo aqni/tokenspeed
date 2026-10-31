@@ -76,11 +76,10 @@ logger = logging.getLogger(__name__)
 # different collectives.
 
 _warned_about_requantization = False
-_HAS_DEEP_EP = importlib.util.find_spec("deep_ep") is not None
 
 if (
     platform.is_hopper_plus
-    and _HAS_DEEP_EP
+    and importlib.util.find_spec("deep_ep") is not None
     and importlib.util.find_spec("deep_gemm") is not None
 ):
     prepare_cuda_toolkit_env()
@@ -92,6 +91,13 @@ if (
         set_pdl,
         transform_sf_into_required_layout,
     )
+
+
+if (
+    platform.is_hopper_plus
+    and importlib.util.find_spec("deep_ep") is not None
+    and importlib.util.find_spec("deep_gemm") is not None
+):
     from tokenspeed_kernel.ops.activation.triton import (
         fused_swiglu_fp8_ue8m0,
         fused_swiglu_fp8_ue8m0_masked_packed,
@@ -841,7 +847,7 @@ def marlin_mxfp4_deepep_moe_apply(
 # ===-----------------------------------------------------------------------===#
 
 
-if platform.is_nvidia and _HAS_DEEP_EP:
+if platform.is_nvidia and importlib.util.find_spec("deep_ep") is not None:
     from flashinfer import (
         scaled_fp4_grouped_quantize,
         silu_and_mul_scaled_nvfp4_experts_quantize,
