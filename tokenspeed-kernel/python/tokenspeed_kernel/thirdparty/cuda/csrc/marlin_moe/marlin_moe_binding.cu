@@ -30,12 +30,12 @@
 
 TVM_FFI_DLL_EXPORT_TYPED_FUNC(
     moe_wna16_marlin_gemm_bf16,
-    (moe_wna16_marlin_gemm<bf16_t, false, false>));
+    (&moe_wna16_marlin_gemm<bf16_t, false, false>));
 
 TVM_FFI_DLL_EXPORT_TYPED_FUNC(
     moe_wna16_marlin_gemm_bf16_ep,
-    (moe_wna16_marlin_gemm<bf16_t, true, false>));
+    (&moe_wna16_marlin_gemm<bf16_t, true, false>));
 
 TVM_FFI_DLL_EXPORT_TYPED_FUNC(
     moe_align_block_size,
-    (MoeAlignBlockSizeKernel<int32_t>::run));
+    (&MoeAlignBlockSizeKernel<int32_t>::run));

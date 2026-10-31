@@ -35,13 +35,16 @@
 #include <cfloat>
 #include <cuda_runtime.h>
 
-#include "tensorrt_llm/kernels/quantization_utils.cuh"
 #include "tvm_ffi_utils.h"
+
+#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 1000)
+#include "tensorrt_llm/kernels/quantization_utils.cuh"
 
 using tensorrt_llm::kernels::cvt_quant_to_fp4_get_sf_out_offset;
 using tensorrt_llm::kernels::cvt_warp_fp16_to_fp4;
 using tensorrt_llm::kernels::PackedVec;
 using tensorrt_llm::kernels::silu_and_mul;
+#endif
 
 namespace tokenspeed {
 

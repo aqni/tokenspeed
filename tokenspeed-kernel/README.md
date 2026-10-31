@@ -20,6 +20,10 @@ fails through kernel selection; it does not change the requested computation.
 GDN decode and newer MoE variants are optional independently of the model's
 other attention and MoE implementations.
 
+Native builds use explicit function pointers for typed exports to support
+older TVM FFI headers. NVFP4's TensorRT helper headers are required only when
+compiling SM100 device code; Hopper builds can use older FlashInfer wheels.
+
 ## Public API
 
 ```python

@@ -44,6 +44,7 @@ from tokenspeed_kernel.ops.moe.marlin import (
     marlin_mxfp4_precomputed_moe_apply,
 )
 from tokenspeed_kernel.platform import current_platform
+from tokenspeed_kernel.thirdparty.cuda.marlin_moe import moe_align_block_size
 from utils import make_mxfp4_moe_weights
 
 
@@ -54,6 +55,31 @@ def _requires_sm90():
         pytest.skip("NVIDIA required")
     if current_platform().arch_version < type(current_platform().arch_version)(9, 0):
         pytest.skip("SM90+ required")
+
+
+@pytest.mark.parametrize("masked", [False, True])
+def test_marlin_alignment_preserves_routes_and_padding(masked: bool) -> None:
+    _requires_sm90()
+    topk_ids = torch.tensor(
+        [[0, 2, 1], [2, -1 if masked else 0, 2]],
+        device="cuda",
+        dtype=torch.int32,
+    )
+    block_size = 4
+    sorted_ids, expert_ids, total = moe_align_block_size(
+        topk_ids, block_size=block_size, num_experts=3
+    )
+    flat = topk_ids.flatten()
+    experts = sorted(set(flat.tolist()))
+    assert total.item() == len(experts) * block_size
+    actual_experts = expert_ids[: len(experts)].tolist()
+    assert sorted(actual_experts) == experts
+    for block, expert in enumerate(actual_experts):
+        routes = sorted_ids[block * block_size : (block + 1) * block_size]
+        expected = torch.nonzero(flat == expert, as_tuple=False).flatten().int()
+        actual = routes[routes < flat.numel()]
+        torch.testing.assert_close(actual.sort().values, expected, atol=0, rtol=0)
+        assert torch.all(routes[routes >= flat.numel()] == flat.numel())
 
 
 class _Weights(torch.nn.Module):
