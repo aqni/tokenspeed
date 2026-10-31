@@ -40,6 +40,7 @@ from tokenspeed_kernel.signature import (
     format_signatures,
     tensor_format,
 )
+from tokenspeed_kernel.thirdparty.flashinfer.availability import has_flashinfer_api
 
 platform = current_platform()
 
@@ -118,20 +119,25 @@ if platform.is_nvidia:
     from flashinfer.prefill import (
         trtllm_ragged_attention_deepseek as _trtllm_ragged_attention_deepseek,
     )
-    from flashinfer.utils import get_trtllm_gen_multi_ctas_kv_counter_bytes
 
-    trtllm_batch_context_with_kv_cache = _with_pdl_default(
-        _trtllm_batch_context_with_kv_cache
-    )
-    trtllm_batch_decode_with_kv_cache = _with_pdl_default(
-        _trtllm_batch_decode_with_kv_cache
-    )
-    trtllm_batch_decode_with_kv_cache_mla = _untuned_with_lse(
-        _with_pdl_default(_trtllm_batch_decode_with_kv_cache_mla)
-    )
-    trtllm_ragged_attention_deepseek = _with_pdl_default(
-        _trtllm_ragged_attention_deepseek
-    )
+    if has_flashinfer_api(
+        "flashinfer.utils", "get_trtllm_gen_multi_ctas_kv_counter_bytes"
+    ):
+        from flashinfer.utils import get_trtllm_gen_multi_ctas_kv_counter_bytes
+
+    if get_trtllm_gen_multi_ctas_kv_counter_bytes is not error_fn:
+        trtllm_batch_context_with_kv_cache = _with_pdl_default(
+            _trtllm_batch_context_with_kv_cache
+        )
+        trtllm_batch_decode_with_kv_cache = _with_pdl_default(
+            _trtllm_batch_decode_with_kv_cache
+        )
+        trtllm_batch_decode_with_kv_cache_mla = _untuned_with_lse(
+            _with_pdl_default(_trtllm_batch_decode_with_kv_cache_mla)
+        )
+        trtllm_ragged_attention_deepseek = _with_pdl_default(
+            _trtllm_ragged_attention_deepseek
+        )
 
 
 if platform.is_blackwell or platform.is_hopper:
@@ -145,7 +151,11 @@ if platform.is_blackwell or platform.is_hopper:
 _workspace_buffer: torch.Tensor | None = None
 
 
-if platform.is_nvidia and platform.is_hopper_plus:
+if (
+    platform.is_nvidia
+    and platform.is_hopper_plus
+    and get_trtllm_gen_multi_ctas_kv_counter_bytes is not error_fn
+):
     # Dense caches, plus an FP8 cache at per-tensor scales (``fp8_kv_scales``).
     _SCALED_FP8_CACHE = tensor_format(
         "scaled-fp8",

@@ -11,6 +11,15 @@ performant kernels for multi-silicon AI inference. It features:
 TokenSpeed-kernel is pip-installable on its own. Others can use it
 directly.
 
+## Optional FlashInfer APIs
+
+FlashInfer backends register only when the installed wheel provides the APIs
+that implementation uses. An older wheel can therefore coexist with the
+portable and other vendor backends. Explicit selection of a missing backend
+fails through kernel selection; it does not change the requested computation.
+GDN decode and newer MoE variants are optional independently of the model's
+other attention and MoE implementations.
+
 ## Public API
 
 ```python

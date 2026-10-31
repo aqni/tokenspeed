@@ -35,6 +35,7 @@ from tokenspeed_kernel.platform import (
 )
 from tokenspeed_kernel.registry import Priority, register_kernel
 from tokenspeed_kernel.signature import format_signatures
+from tokenspeed_kernel.thirdparty.flashinfer.availability import has_flashinfer_api
 
 platform = current_platform()
 
@@ -44,7 +45,11 @@ platform = current_platform()
 # ===-----------------------------------------------------------------------===#
 
 
-if platform.is_nvidia:
+if (
+    platform.is_nvidia
+    and has_flashinfer_api("flashinfer", "ActivationType", "cutlass_fused_moe")
+    and has_flashinfer_api("flashinfer.fused_moe", "cutlass_fused_moe_workspace_size")
+):
     from flashinfer import ActivationType, cutlass_fused_moe
     from flashinfer.fused_moe import cutlass_fused_moe_workspace_size
 
@@ -256,7 +261,19 @@ _RELU2_TRAITS = {
 }
 
 
-if platform.is_nvidia:
+if (
+    platform.is_nvidia
+    and has_flashinfer_api("flashinfer", "trtllm_bf16_moe")
+    and has_flashinfer_api(
+        "flashinfer.fused_moe", "ActivationType", "trtllm_bf16_routed_moe"
+    )
+    and has_flashinfer_api(
+        "flashinfer.fused_moe.core",
+        "_maybe_get_cached_w3_w1_permute_indices",
+        "convert_to_block_layout",
+        "get_w2_permute_indices_with_cache",
+    )
+):
     from flashinfer import trtllm_bf16_moe
     from flashinfer.fused_moe import ActivationType, trtllm_bf16_routed_moe
     from flashinfer.fused_moe.core import (
@@ -669,7 +686,9 @@ if platform.is_nvidia:
 # ===-----------------------------------------------------------------------===#
 
 
-if platform.is_nvidia:
+if platform.is_nvidia and has_flashinfer_api(
+    "flashinfer", "ActivationType", "cutlass_fused_moe"
+):
     from flashinfer import ActivationType, cutlass_fused_moe
 
     def flashinfer_cutlass_fp8_moe_weights(plan: dict, w: torch.nn.Module):
@@ -811,7 +830,18 @@ if platform.is_nvidia:
 # unshuffled MajorK load path on Blackwell without changing the block scales or
 # the logical expert weights.
 
-if platform.is_nvidia:
+if (
+    platform.is_nvidia
+    and has_flashinfer_api("flashinfer", "shuffle_matrix_a")
+    and has_flashinfer_api(
+        "flashinfer.fused_moe",
+        "RoutingMethodType",
+        "convert_to_block_layout",
+        "trtllm_fp8_block_scale_moe",
+        "trtllm_fp8_block_scale_routed_moe",
+    )
+    and has_flashinfer_api("flashinfer.tllm_enums", "WeightLayout")
+):
     from flashinfer import shuffle_matrix_a
     from flashinfer.fused_moe import (
         RoutingMethodType,
@@ -1234,7 +1264,13 @@ def shuffle_fp8_channel_weights(
     )
 
 
-if platform.is_nvidia:
+if platform.is_nvidia and has_flashinfer_api(
+    "flashinfer.fused_moe.core",
+    "_maybe_get_cached_w3_w1_permute_indices",
+    "get_w2_permute_indices_with_cache",
+    "trtllm_fp8_per_channel_scale_moe",
+    "trtllm_fp8_per_channel_scale_routed_moe",
+):
     from flashinfer.fused_moe.core import (
         _maybe_get_cached_w3_w1_permute_indices as maybe_get_cached_w3_w1_permute_indices,
     )
@@ -1552,7 +1588,16 @@ _W4A16 = "w4a16"
 _W4A8 = "w4a8"
 
 
-if platform.is_nvidia:
+if (
+    platform.is_nvidia
+    and has_flashinfer_api("flashinfer", "ActivationType", "cutlass_fused_moe")
+    and has_flashinfer_api(
+        "flashinfer.fused_moe",
+        "interleave_moe_scales_for_sm90_mixed_gemm",
+        "interleave_moe_weights_for_sm90_mixed_gemm",
+        "preprocess_moe_weights_for_sm90_mixed_gemm_humming",
+    )
+):
     from flashinfer import ActivationType, cutlass_fused_moe
     from flashinfer.fused_moe import (
         interleave_moe_scales_for_sm90_mixed_gemm,
@@ -1972,7 +2017,23 @@ def _reorder_w1w3_to_w3w1(x: torch.Tensor, dim: int = -2) -> torch.Tensor:
     return out.view(view_dtype) if view_dtype is not None else out
 
 
-if platform.is_nvidia:
+if (
+    platform.is_nvidia
+    and has_flashinfer_api(
+        "flashinfer",
+        "mxfp8_quantize",
+        "nvfp4_block_scale_interleave",
+        "trtllm_fp4_block_scale_moe",
+    )
+    and has_flashinfer_api("flashinfer.cute_dsl", "is_cute_dsl_available")
+    and has_flashinfer_api("flashinfer.fused_moe", "trtllm_fp4_block_scale_routed_moe")
+    and has_flashinfer_api(
+        "flashinfer.fused_moe.core",
+        "_maybe_get_cached_w3_w1_permute_indices",
+        "get_w2_permute_indices_with_cache",
+    )
+    and has_flashinfer_api("flashinfer.tllm_enums", "ActivationType")
+):
     from flashinfer import (
         mxfp8_quantize,
         nvfp4_block_scale_interleave,
@@ -2790,7 +2851,17 @@ _EPILOGUE_TILE_M = 128
 _BLOCK_K = 128
 
 
-if platform.is_nvidia:
+if (
+    platform.is_nvidia
+    and has_flashinfer_api("flashinfer", "block_scale_interleave")
+    and has_flashinfer_api(
+        "flashinfer.fused_moe.core",
+        "_maybe_get_cached_w3_w1_permute_indices",
+        "convert_to_block_layout",
+        "get_w2_permute_indices_with_cache",
+        "trtllm_mxint4_block_scale_moe",
+    )
+):
     from flashinfer import block_scale_interleave
     from flashinfer.fused_moe.core import (
         _maybe_get_cached_w3_w1_permute_indices,
@@ -3026,7 +3097,9 @@ if platform.is_nvidia:
 # ===-----------------------------------------------------------------------===#
 
 
-if platform.is_nvidia:
+if platform.is_nvidia and has_flashinfer_api(
+    "flashinfer", "ActivationType", "cutlass_fused_moe"
+):
     from flashinfer import ActivationType, cutlass_fused_moe
 
     def flashinfer_cutlass_nvfp4_moe_weights(plan: dict, w: torch.nn.Module):
@@ -3242,14 +3315,27 @@ class PreparedNvfp4Routing:
     output: torch.Tensor
 
 
-if platform.is_nvidia:
+if (
+    platform.is_nvidia
+    and has_flashinfer_api("flashinfer", "fp4_quantize", "nvfp4_block_scale_interleave")
+    and has_flashinfer_api("flashinfer.autotuner", "AutoTuner")
+    and has_flashinfer_api("flashinfer.fused_moe", "core")
+    and has_flashinfer_api(
+        "flashinfer.fused_moe.core",
+        "_maybe_get_cached_w3_w1_permute_indices",
+        "get_w2_permute_indices_with_cache",
+    )
+    and has_flashinfer_api("flashinfer.fused_moe.da_moe", "DABody")
+    and has_flashinfer_api("flashinfer.tllm_enums", "ActivationType")
+    and has_flashinfer_api("flashinfer.utils", "device_support_pdl")
+):
     from flashinfer import (
         fp4_quantize,
         nvfp4_block_scale_interleave,
     )
 
     # The split routing API: metadata filled apart from the expert GEMMs. An
-    # older wheel fails this import rather than silently keeping the fused launch.
+    # older wheel leaves this optional backend unregistered.
     from flashinfer.autotuner import AutoTuner
     from flashinfer.fused_moe import core as _fi_core
     from flashinfer.fused_moe.core import (
@@ -4254,8 +4340,7 @@ if platform.is_nvidia:
             activation_type=ActivationType.Relu2,
         )
 
-
-if not platform.is_nvidia:
+else:
 
     def prepare_nvfp4_routing(
         w: torch.nn.Module,

@@ -45,8 +45,14 @@ from tokenspeed_kernel.platform import (
 )
 from tokenspeed_kernel.registry import Priority, register_kernel
 from tokenspeed_kernel.signature import format_signatures
+from tokenspeed_kernel.thirdparty.flashinfer.availability import has_flashinfer_api
 
 platform = current_platform()
+_has_trtllm_counter = (
+    has_flashinfer_api("flashinfer.utils", "get_trtllm_gen_multi_ctas_kv_counter_bytes")
+    if platform.is_nvidia
+    else False
+)
 
 top_k = None
 TopKTieBreak = None
@@ -57,12 +63,12 @@ if platform.is_nvidia:
     except ImportError:
         pass
 
-if platform.is_nvidia and platform.is_hopper_plus:
+if platform.is_nvidia and platform.is_hopper_plus and _has_trtllm_counter:
     from flashinfer.decode import (
         trtllm_batch_decode_with_kv_cache_mla as _trtllm_batch_decode_with_kv_cache_mla,
     )
 
-if platform.is_blackwell or platform.is_hopper:
+if (platform.is_blackwell or platform.is_hopper) and _has_trtllm_counter:
     from flashinfer.utils import get_trtllm_gen_multi_ctas_kv_counter_bytes
 
 
@@ -88,7 +94,7 @@ def _with_pdl_default(function):
     return wrapper
 
 
-if platform.is_nvidia and platform.is_hopper_plus:
+if platform.is_nvidia and platform.is_hopper_plus and _has_trtllm_counter:
     trtllm_batch_decode_with_kv_cache_mla = _with_pdl_default(
         _trtllm_batch_decode_with_kv_cache_mla
     )
@@ -313,7 +319,7 @@ def _flashinfer_trtllm_dsa_impl(
     return result.reshape(num_tokens, q_kernel.shape[2], int(kv_lora_rank))
 
 
-if platform.is_nvidia and platform.is_hopper_plus:
+if platform.is_nvidia and platform.is_hopper_plus and _has_trtllm_counter:
 
     @_register_flashinfer_trtllm_dsa(
         "dsa_decode",

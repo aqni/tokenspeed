@@ -57,6 +57,7 @@ from tokenspeed_kernel.platform import (
 )
 from tokenspeed_kernel.registry import Priority, error_fn, register_kernel
 from tokenspeed_kernel.signature import format_signatures
+from tokenspeed_kernel.thirdparty.flashinfer.availability import has_flashinfer_api
 
 platform = current_platform()
 SUPPORTED_HEAD_DIM = 128
@@ -66,7 +67,16 @@ _gated_delta_rule_decode_pretranspose = error_fn
 _gated_delta_rule_mtp = error_fn
 _gated_delta_rule_bf16_mtp = None
 
-if platform.is_hopper_plus:
+if (
+    platform.is_hopper_plus
+    and has_flashinfer_api(
+        "flashinfer.gdn_decode", "gated_delta_rule_decode_pretranspose"
+    )
+    and has_flashinfer_api("flashinfer.gdn_prefill", "chunk_gated_delta_rule")
+    and has_flashinfer_api(
+        "flashinfer.gdn_kernels.gdn_decode_mtp", "get_tile_v_mtp", "get_vec_size_mtp"
+    )
+):
     from tokenspeed_kernel.ops.attention.gdn._flashinfer import (
         adapter as _flashinfer_gdn,
     )
@@ -81,12 +91,16 @@ if platform.is_hopper_plus:
 
 def is_available() -> bool:
     """Whether the flashinfer GDN chunk-prefill kernel can run on this platform."""
+    if _chunk_gated_delta_rule is error_fn:
+        return False
     cuda_major = int(torch.version.cuda.split(".")[0]) if torch.version.cuda else 0
     # Older FlashInfer wheels lack the separate Rubin implementation.
     supported_arch = platform.is_hopper or platform.is_blackwell
     if platform.arch_version == ArchVersion(10, 7):
         supported_arch = _flashinfer_gdn.is_rubin_prefill_available()
-    return supported_arch and cuda_major >= 13
+    return (
+        supported_arch and cuda_major >= 13 and _chunk_gated_delta_rule is not error_fn
+    )
 
 
 def is_supported(
@@ -106,7 +120,7 @@ def is_supported(
 
 def is_decode_available() -> bool:
     """Whether the SM90+ GDN decode/MTP kernels can run on this platform."""
-    return platform.is_hopper_plus
+    return platform.is_hopper_plus and _gated_delta_rule_mtp is not error_fn
 
 
 CHUNK_SIZE = 64

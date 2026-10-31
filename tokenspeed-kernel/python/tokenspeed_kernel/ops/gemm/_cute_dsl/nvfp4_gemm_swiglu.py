@@ -31,7 +31,7 @@ platform = current_platform()
 
 nvfp4_gemm_swiglu_nvfp4_quant = error_fn
 
-if platform.is_nvidia:
+if platform.is_blackwell:
     import cuda.bindings.driver as cuda
     import cutlass
     import cutlass.cute as cute

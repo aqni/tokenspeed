@@ -41,6 +41,7 @@ from tokenspeed_kernel.signature import (
     format_signatures,
     tensor_format,
 )
+from tokenspeed_kernel.thirdparty.flashinfer.availability import has_flashinfer_api
 
 platform = current_platform()
 _fp8_dtype = torch.float8_e4m3fn
@@ -87,10 +88,12 @@ _NVFP4_FORMAT_SIGNATURES = frozenset(
 gemm_fp8_nt_groupwise = error_fn
 tinygemm_bf16 = error_fn
 
-if platform.is_hopper_plus:
-    from flashinfer.gemm import (
-        gemm_fp8_nt_groupwise,
-    )
+if platform.is_hopper_plus and has_flashinfer_api(
+    "flashinfer.gemm", "gemm_fp8_nt_groupwise"
+):
+    from flashinfer.gemm import gemm_fp8_nt_groupwise
+
+if platform.is_hopper_plus and has_flashinfer_api("flashinfer.gemm", "tinygemm_bf16"):
     from flashinfer.gemm import tinygemm_bf16 as _tinygemm_bf16
 
     def tinygemm_bf16(

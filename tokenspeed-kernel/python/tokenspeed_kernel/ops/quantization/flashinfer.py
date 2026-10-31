@@ -31,6 +31,7 @@ from tokenspeed_kernel.platform import (
 )
 from tokenspeed_kernel.registry import Priority, error_fn, register_kernel
 from tokenspeed_kernel.signature import format_signatures
+from tokenspeed_kernel.thirdparty.flashinfer.availability import has_flashinfer_api
 
 platform = current_platform()
 
@@ -69,7 +70,9 @@ if platform.is_nvidia:
 
     mxfp8_quantize = _with_pdl_default(_mxfp8_quantize)
 
-    if platform.is_hopper:
+    if platform.is_hopper and has_flashinfer_api(
+        "flashinfer.gemm.gemm_base", "get_fp8_blockscale_gemm_runner_sm90"
+    ):
         from flashinfer.gemm.gemm_base import (
             get_fp8_blockscale_gemm_runner_sm90 as fp8_blockscale_quantize_runner_sm90,
         )
