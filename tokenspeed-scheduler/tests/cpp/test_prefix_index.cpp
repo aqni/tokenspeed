@@ -668,3 +668,76 @@ TEST(PrefixCacheIndexEvictionOrderTest, MatchesTheEvictableSetSeenByAFullScan) {
 
 }  // namespace
 }  // namespace tokenspeed::test
+
+namespace tokenspeed::test {
+TEST(PrefixCacheSessionTest, DeviceReuseProtectsSharedHostCopiesFromSessionDemotion) {
+    for (bool tagged_reader : {false, true}) {
+        BlockPool device(2, {1});
+        BlockPool host(2, {1});
+        PrefixCacheIndex index(kGroupId);
+        auto writer = std::make_shared<SessionCacheTag>();
+        writer->id = "writer";
+        SessionCacheOwner reader;
+        if (tagged_reader) {
+            reader = std::make_shared<SessionCacheTag>();
+            reader->id = "reader";
+        }
+        const std::vector<CacheKey> keys{KeyOf("reused"), KeyOf("untouched")};
+        for (const auto& key : keys) {
+            auto block = host.AcquireBlock(kGroupId);
+            index.Register(host, block, key, 10, 0, CacheBoundaryKind::kChunk, nullptr, writer);
+        }
+        const std::vector<CacheBlockRef> source_blocks{device.AcquireBlock(kGroupId), {}};
+        index.TouchExisting(host, keys, source_blocks, 20, reader);
+        EXPECT_EQ(index.Inspect(host, keys[0])->metadata.last_access_epoch, 20u);
+        EXPECT_EQ(index.Inspect(host, keys[0])->metadata.session, nullptr);
+        EXPECT_EQ(index.Inspect(host, keys[1])->metadata.session, writer);
+        writer->demoted = true;
+        EXPECT_EQ(index.DemoteSession(host, writer), 1u);
+        EXPECT_EQ(index.Inspect(host, keys[0])->metadata.last_access_epoch, 20u);
+        EXPECT_EQ(index.Inspect(host, keys[1])->metadata.last_access_epoch, 0u);
+        EXPECT_FALSE(index.Inspect(host, keys[0])->pinned);
+        EXPECT_EQ(index.NumEntries(host), 2);
+    }
+}
+
+TEST(PrefixCacheSessionTest, DemotionAgesExclusiveIdleBlocksButProtectsSharedAndActiveBlocks) {
+    BlockPool pool(5, {1});
+    PrefixCacheIndex index(kGroupId);
+    auto first = std::make_shared<SessionCacheTag>();
+    first->id = "first";
+    auto second = std::make_shared<SessionCacheTag>();
+    second->id = "second";
+    auto publish = [&](const std::string& key, const SessionCacheOwner& session, std::uint64_t epoch) {
+        auto block = pool.AcquireBlock(kGroupId);
+        index.Register(pool, block, KeyOf(key), epoch, 0, CacheBoundaryKind::kChunk, nullptr, session);
+        return block;
+    };
+    auto exclusive = publish("exclusive", first, 20);
+    auto exclusive_location = exclusive->Location();
+    exclusive = {};
+    auto shared = publish("shared", first, 30);
+    index.Register(pool, shared, KeyOf("shared"), 40, 0, CacheBoundaryKind::kChunk, nullptr, second);
+    auto shared_location = shared->Location();
+    shared = {};
+    auto active = publish("active", first, 50);
+    auto active_location = active->Location();
+    auto other = publish("other", second, 10);
+    auto other_location = other->Location();
+    other = {};
+    first->demoted = true;
+    EXPECT_EQ(index.DemoteSession(pool, first), 1u);
+    EXPECT_EQ(index.MetadataFor(pool, exclusive_location)->last_access_epoch, 0u);
+    EXPECT_EQ(index.MetadataFor(pool, shared_location)->last_access_epoch, 40u);
+    EXPECT_EQ(index.MetadataFor(pool, active_location)->last_access_epoch, 50u);
+    EXPECT_EQ(index.MetadataFor(pool, other_location)->last_access_epoch, 10u);
+    EXPECT_FALSE(index.Evict(pool, active_location).has_value());
+    active = {};
+    EXPECT_EQ(index.DemoteSession(pool, first), 2u);
+    EXPECT_TRUE(index.Contains(pool, KeyOf("exclusive")));
+    first->demoted = false;
+    auto hit = index.AcquireMatched(pool, std::vector<CacheKey>{KeyOf("exclusive")}, 0, GroupPrefixProbe{.hits = {1}},
+                                    60, first);
+    EXPECT_EQ(index.MetadataFor(pool, exclusive_location)->last_access_epoch, 60u);
+}
+}  // namespace tokenspeed::test
