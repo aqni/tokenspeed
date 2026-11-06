@@ -40,7 +40,7 @@ use crate::{
 /// What the engine fixed at startup and every admission checks against.
 #[derive(Debug, Clone)]
 pub struct IngressLimits {
-    /// Token ids in the vocabulary.
+    /// Token ids represented by the output head.
     pub vocab_size: i64,
     /// The model's EOS ids, which end every request not ignoring EOS.
     pub eos_token_ids: Vec<i32>,
@@ -918,6 +918,34 @@ mod tests {
                 .as_deref(),
             Some(schema)
         );
+    }
+
+    #[test]
+    fn input_only_tokens_are_not_output_logprob_targets() {
+        let limits = IngressLimits {
+            vocab_size: 64,
+            enable_output_logprobs: true,
+            ..limits()
+        };
+        // The embedding can consume an ID outside the output head. Asking for
+        // sampled-token logprobs must not shrink the prompt's input domain.
+        let sampled = TokenizedGenerateReqInput {
+            return_logprob: true,
+            ..request("input-only", vec![1, 100], SamplingParams::default())
+        };
+        assert!(matches!(admit(sampled, &limits), Some(Admitted::Run(_))));
+        let scored = TokenizedGenerateReqInput {
+            return_logprob: true,
+            logprob_start_len: 0,
+            ..request("unscorable", vec![1, 100], SamplingParams::default())
+        };
+        assert!(refused_message(admit(scored, &limits).unwrap()).contains("[0, 64)"));
+        let scoreable = TokenizedGenerateReqInput {
+            return_logprob: true,
+            logprob_start_len: 0,
+            ..request("scoreable", vec![1, 63], SamplingParams::default())
+        };
+        assert!(matches!(admit(scoreable, &limits), Some(Admitted::Run(_))));
     }
 
     #[test]

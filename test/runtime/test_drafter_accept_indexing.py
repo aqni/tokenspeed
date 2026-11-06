@@ -169,7 +169,9 @@ def _run_idle_round(drafter) -> list[ForwardMode]:
         req_pool_indices_buf=torch.zeros(4, dtype=torch.int64)
     )
     executor.runtime_states = SimpleNamespace(
-        valid_cache_lengths=torch.zeros(4, dtype=torch.int32), vocab_size=32
+        valid_cache_lengths=torch.zeros(4, dtype=torch.int32),
+        vocab_size=32,
+        output_vocab_size=32,
     )
     executor.attn_backend = SimpleNamespace()
     executor.token_to_kv_pool = SimpleNamespace()

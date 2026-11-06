@@ -23,7 +23,7 @@ from __future__ import annotations
 import gc
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
@@ -465,6 +465,14 @@ class ModelExecutorConfig:
     # (--enable-state-checkpoint-in-forward).
     state_checkpoint_in_forward: bool = False
 
+    # The optional head size does not shift any existing positional arguments.
+    # Omitting it retains the shared input/output vocabulary.
+    output_vocab_size: int | None = field(default=None, kw_only=True)
+
+    def __post_init__(self) -> None:
+        if self.output_vocab_size is None:
+            self.output_vocab_size = self.vocab_size
+
     @property
     def spec_draft_tree(self) -> bool:
         """Drafts go through the draft-tree path: topk > 1, or EAGLE-Harness chains."""
@@ -509,6 +517,7 @@ class ModelExecutorConfig:
             max_num_seqs=server_args.max_num_seqs,
             chunked_prefill_size=server_args.chunked_prefill_size,
             vocab_size=model_config.vocab_size,
+            output_vocab_size=model_config.output_vocab_size,
             context_len=model_config.context_len,
             physical_context_len=(
                 model_config.context_len + server_args.spec_context_pad
@@ -637,6 +646,7 @@ class ModelExecutor:
         self.runtime_states = RuntimeStates(
             req_pool_size=config.max_req_pool_size,
             vocab_size=config.vocab_size,
+            output_vocab_size=config.output_vocab_size,
             device=self.device,
             output_length=config.output_length,
         )
@@ -699,7 +709,7 @@ class ModelExecutor:
                 input_buffers=self.input_buffers,
                 attn_backend=draft_attn_backend,
                 token_to_kv_pool=draft_token_to_kv_pool,
-                vocab_size=config.vocab_size,
+                vocab_size=config.output_vocab_size,
             )
             self.drafter.wire_target(self.model_runner.model)
             # Draft-prob sampling reads the request's temperature / top-k /
@@ -741,7 +751,7 @@ class ModelExecutor:
             disable_capturable=config.disable_capturable_grammar,
             is_nvidia=current_platform().is_nvidia,
             max_bs=max_bs,
-            vocab_size=config.vocab_size,
+            vocab_size=config.output_vocab_size,
             max_tokens_per_req=spec_num_tokens,
             device=self.device,
         )
@@ -760,7 +770,7 @@ class ModelExecutor:
             requested=self.config.dp_sampling,
             drafter_available=self.drafter is not None,
             limits=DpSamplingRuntimeLimits(
-                runtime_vocab_size=self.config.vocab_size,
+                runtime_vocab_size=self.config.output_vocab_size,
                 max_num_seqs=config.max_num_seqs,
                 data_parallel_size=config.data_parallel_size,
                 num_tokens_per_req=spec_num_tokens,
@@ -1794,7 +1804,9 @@ class ModelExecutor:
         # Backstop: flag any request whose sampled id falls outside [0, vocab)
         # so the output processor can terminate it. Covers sampler/verify kernel
         # corruption and DP-sharded steps that audit_logits cannot attribute.
-        self.nan_guard.merge_oov(output_tokens, ctx, self.runtime_states.vocab_size)
+        self.nan_guard.merge_oov(
+            output_tokens, ctx, self.runtime_states.output_vocab_size
+        )
 
         # Fork sampler-output D2H onto the grammar side stream so the
         # next step's host node can advance the matcher.
@@ -1920,7 +1932,7 @@ class ModelExecutor:
                 else None
             ),
             draft_probs=self.runtime_states.draft_probs,
-            vocab_size=self.runtime_states.vocab_size,
+            vocab_size=self.runtime_states.output_vocab_size,
             device=self.device,
         )
 
@@ -1950,7 +1962,7 @@ class ModelExecutor:
             sampling_info = SamplingBatchInfo(
                 req_pool_indices=self.input_buffers.req_pool_indices_buf[:0],
                 valid_cache_lengths=self.runtime_states.valid_cache_lengths,
-                vocab_size=self.runtime_states.vocab_size,
+                vocab_size=self.runtime_states.output_vocab_size,
                 device=self.device,
             )
             if self.forward_step.can_run(bs=0, ctx=ctx):
@@ -2664,7 +2676,7 @@ class ModelExecutor:
                 # inference mode, so re-enter it (maybe_inference_mode mirrors the
                 # forward and reduces to no_grad when inference mode is disabled,
                 # where output_tokens isn't an inference tensor anyway).
-                vocab_size = self.runtime_states.vocab_size
+                vocab_size = self.runtime_states.output_vocab_size
                 with maybe_inference_mode():
                     output_tokens.clamp_(0, vocab_size - 1)
 
@@ -2784,9 +2796,9 @@ class ModelExecutor:
         rows, slots = staged.to(self.device, non_blocking=True)
         targets = self.input_buffers.shifted_prefill_ids_buf[rows].to(torch.int64)
         self.nan_guard.audit_input_logprob_targets(
-            targets, slots, num_extends, self.runtime_states.vocab_size
+            targets, slots, num_extends, self.runtime_states.output_vocab_size
         )
-        targets.clamp_(0, self.runtime_states.vocab_size - 1)
+        targets.clamp_(0, self.runtime_states.output_vocab_size - 1)
         rows_per_rank = None
         num_input_rows = total_tokens
         if query_shard is not None and query_shard.size > 1:
